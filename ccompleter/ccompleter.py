@@ -129,7 +129,7 @@ def getFromNamespaceByName(namespace, name):
                     return eval(name, namespace)
                 except Exception as ex:
                     LOGGER.debug("Unable to find %s in namespace. Full exception: \n%s" % (name, traceback.format_exc()))
-                    title('could not eval?')
+                    title('could not eval?') # TODO... we can probably fix some of these things.
                     return None
 
         return None # no idea whats going on.
