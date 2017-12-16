@@ -29,90 +29,6 @@ def title(s):
     if os.name == 'nt':
         ctypes.windll.kernel32.SetConsoleTitleA(ctypes.c_char_p(str(s).encode()))
 
-"""
-def isBound(func):
-    '''
-    Brief:
-        isBound(func) - Silly heuristic to figure out of a function is bound or not
-
-    Author(s):
-        Charles Machalow
-    '''
-    argspec = inspect.getargspec(func)
-    if len(argspec.args):
-        return argspec.args[0] in ['self', 'cls']
-    return False
-
-def getFunctionArgsString(func):
-    '''
-    Brief:
-        getFunctionArgsString(func) - Attempts to find the function args
-            string from a given function, using either inspect or the function's documentation.
-
-    Description:
-        The return string is usually the parenthesis (and params) after a function
-            defintion, though self/cls is removed if the method appears to be bound.
-
-    Author(s):
-        Charles Machalow
-    '''
-    def getFunctionArgsStringFromHelp(func):
-        '''
-        Brief:
-            getFunctionArgsStringFromHelp(func) - Attempts to find the function args
-                string from a given function, using only the function's documentation.
-
-        Author(s):
-            Charles Machalow
-        '''
-        doc = pydoc.plain(pydoc.render_doc(func))
-        docLines = doc.splitlines()
-        if docLines:
-            for brief in docLines:
-                if (func.__name__ + "(") in brief and ')' in brief: # function spotted?
-                    leftParen = brief.find('(')
-                    rightParen = brief.rfind(')') + 1
-                    return brief[leftParen:rightParen]
-
-        return None
-    if inspect.isclass(func):
-        func = func.__init__
-
-    try:
-        argspec = inspect.getargspec(func)
-    except: # not a python function?
-        # maybe the docstring says something like this
-        retVal = getFunctionArgsStringFromHelp(func)
-        if retVal is None:
-            return '(...)' # no idea
-        return retVal
-
-    if isBound(func):
-        args = argspec.args[1:]
-    else:
-        args = argspec.args
-
-    if args is None:
-        args = []
-
-    defaults = argspec.defaults
-    if defaults is None:
-        defaults = []
-
-    retStr = ''
-    defaultStart = len(args) - len(defaults)
-    for idx, arg in enumerate(args):
-        if idx >= defaultStart and defaultStart >= 0:
-            default = defaults[idx-defaultStart]
-            if isinstance(default, str):
-                default = "\"" + default + "\""
-            retStr += "%s=%s," % (arg, default)
-        else:
-            retStr += "%s," % (arg)
-
-    return "(" + retStr.rstrip(",") + ")"
-"""
-
 def getFromNamespaceByName(namespace, name):
     if name in namespace:
         return namespace[name]
@@ -159,32 +75,70 @@ def getDocToPrint(func):
     doc += pydoc.plain(pydoc.render_doc(func))
     return doc
 
-def getAllPossibleImports(removePrivate=False):
-    def getPossibleImportsFromPath(path):
-        possibleImports = set()
-        if os.path.isdir(path):
-            for file in os.listdir(path):
-                fullPathToFile = os.path.join(path, file)
-                if os.path.isfile(fullPathToFile):
-                    ext = file.split('.')[-1].upper()
-                    if ext in ['PY', 'PYC', 'PYD']:
-                        possibleImports.add(file.split('.')[0])
-                elif os.path.isdir(fullPathToFile):
-                    initFile = os.path.join(fullPathToFile, '__init__.py')
-                    if os.path.isfile(initFile):
-                        possibleImports.add(file)
+def getPossibleImportsFromPath(path):
+    possibleImports = set()
+    if os.path.isdir(path):
+        for file in os.listdir(path):
+            fullPathToFile = os.path.join(path, file)
+            if os.path.isfile(fullPathToFile):
+                ext = file.split('.')[-1].upper()
+                if ext in ['PY', 'PYC', 'PYD']:
+                    possibleImports.add(file.split('.')[0])
+            elif os.path.isdir(fullPathToFile):
+                # check if this directory is a module
+                initFile = os.path.join(fullPathToFile, '__init__.py')
+                if os.path.isfile(initFile):
+                    possibleImports.add(file)
 
-        return possibleImports
+    return possibleImports
 
+def getAllPossibleImports(removePrivate=False, currentModuleOrFolder=None):
     possibleImports = set()
     for directory in sys.path:
+
+        # if they have sys. then we should show sys.path (example)
+        if currentModuleOrFolder is not None:
+            directory = os.path.join(directory, currentModuleOrFolder)
+            if not os.path.isdir(directory):
+                continue
         possibleImports.update(getPossibleImportsFromPath(directory))
 
-    retList = sorted(list(possibleImports) + list(sys.builtin_module_names))
+
+    if currentModuleOrFolder is None:
+        retList = sorted(list(possibleImports) + list(sys.builtin_module_names))
+    else:
+        retList = sorted(list(possibleImports))
+        for idx, itm in enumerate(retList):
+            # add the <ctypes.> to the start
+            retList[idx] = currentModuleOrFolder.replace(os.path.sep, '.') + itm
+
     if removePrivate:
         return [i for i in retList if not i.startswith('_')]
 
     return retList
+
+def getCurrentImportMatches(module):
+    if '.' in module:
+        # remove everything after the last dot
+        module = module[:module.find('.') + 1]
+        module = module.replace('.', os.path.sep)
+        return getAllPossibleImports(currentModuleOrFolder=module)
+
+    return getAllPossibleImports()
+
+def isImportLine(lineText):
+    return lineText.startswith('import ') or lineText.startswith('from ')
+
+def getImportModulePathFromLine(lineText):
+    if lineText.startswith('import '):
+        return lineText.lstrip('import').strip()
+    elif lineText.startswith('from '):
+        lineTextSplit = lineText.split()
+        if len(lineText.split()) > 1:
+            return lineText.split()[1]
+        return '' # nothing after from yet
+
+    raise ValueError("invalid lineText given to function")
 
 def getConsoleSize():
     if os.name == 'nt':
@@ -215,7 +169,7 @@ class CCompleter(rlcompleter.Completer):
             self.namespace = dict(builtins.__dict__)
             self.namespace.update(__main__.__dict__)
 
-        if len(text) == 0 or str(readline.get_line_buffer()).startswith('import '):
+        if len(text) == 0 or isImportLine(readline.get_line_buffer()):
             text = str(readline.get_line_buffer())
         title((text, state,))
         if text.endswith('(') and state == 0:
@@ -225,18 +179,19 @@ class CCompleter(rlcompleter.Completer):
                 doc = getDocToPrint(func)
                 if doc:
                     self.showHelpText(doc)
-        elif text.startswith('import '):# and state == 0:
+        elif isImportLine(text):
             if state == 0:
-                self.possibleImports = getAllPossibleImports()
-                starter = text.lstrip('import').strip()
-                if starter:
-                    self.possibleImports = [i for i in self.possibleImports if i.startswith(starter)]
+                modulePath = getImportModulePathFromLine(text)
+                self.possibleImports = getCurrentImportMatches(modulePath)
+                if modulePath:
+                    self.possibleImports = [i for i in self.possibleImports if i.startswith(modulePath)]
             try:
                 return self.possibleImports[state]
             except IndexError:
                 # None should be returned when we run out of options.
                 return None
         else:
+            title('rl')
             return rlcompleter.Completer.complete(self, text, state)
 
 readline.parse_and_bind('tab: complete')
